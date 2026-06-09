@@ -1,0 +1,152 @@
+================================================================================
+CLINICORP API - QUICK REFERENCE
+================================================================================
+
+CREDENCIAIS (from .env)
+================================================================================
+URL Base:          https://api.clinicorp.com/rest/v1
+Usuario:           praxis
+Subscriber ID:     praxis
+Business ID:       5292365675823104
+Auth:              HTTPBasicAuth (usuario + token)
+
+ENDPOINTS - PARAMETROS CORRETOS
+================================================================================
+
+1) GET /appointment/list
+   Parametros Obrigatorios:
+     - subscriber_id = "praxis"
+     - from = "YYYY-MM-DD" (data inicial)
+     - to = "YYYY-MM-DD" (data final)
+     - businessId = 5292365675823104 (CAMELCASE!)
+
+   Parametros Opcionais:
+     - patientId = "ID_DO_PACIENTE"
+     - includeCanceled = true/false
+
+   Exemplo:
+   GET /appointment/list?subscriber_id=praxis&from=2025-06-09&to=2026-06-09&businessId=5292365675823104
+
+---
+
+2) GET /financial/list_invoices
+   Parametros Obrigatorios:
+     - subscriber_id = "praxis"
+     - from = "YYYY-MM-DD" (data inicial)
+     - to = "YYYY-MM-DD" (data final)
+     - business_id = 5292365675823104 (SNAKE_CASE!)
+
+   Exemplo:
+   GET /financial/list_invoices?subscriber_id=praxis&from=2025-06-09&to=2026-06-09&business_id=5292365675823104
+
+---
+
+3) GET /financial/list_payments
+   Parametros Obrigatorios:
+     - subscriber_id = "praxis"
+     - from = "YYYY-MM-DD" (data inicial)
+     - to = "YYYY-MM-DD" (data final)
+     - business_id = 5292365675823104 (SNAKE_CASE!)
+
+   Exemplo:
+   GET /financial/list_payments?subscriber_id=praxis&from=2025-06-09&to=2026-06-09&business_id=5292365675823104
+
+---
+
+4) GET /patient/get
+   Nota: Nao eh lista, busca paciente individual
+
+   Parametros Obrigatorios:
+     - subscriber_id = "praxis"
+     - patientId = "ID_DO_PACIENTE" (obrigatorio - eh busca por ID)
+
+   Parametros Opcionais:
+     - Name, OtherDocumentId, Phone, Email
+
+   Exemplo:
+   GET /patient/get?subscriber_id=praxis&patientId=123456
+
+================================================================================
+ERROS COMUNS E SOLUÇÕES
+================================================================================
+
+Erro: HTTP 400 Bad Request
+  Causa: Parametros incorretos (antes: data_inicial/data_final)
+  Solucao: Use from/to em vez disso
+
+Erro: HTTP 401 Unauthorized
+  Causa: Credenciais incorretas ou token expirado
+  Solucao: Verifique .env - usuario API e token
+
+Erro: HTTP 404 Not Found
+  Causa: Endpoint nao existe (ex: /patient/list)
+  Solucao: Use /patient/get ou outra alternativa
+
+Inconsistencia: businessId vs business_id
+  Causa: Pode ser proposital na API
+  Solucao: Use businessId para /appointment/list
+           Use business_id para /financial/*
+
+================================================================================
+EXECUÇÃO DO SCRIPT
+================================================================================
+
+PowerShell (Admin):
+  cd C:\projetos_praxis\Clinicorp
+  python expand_with_subscriber.py
+
+VS Code:
+  - Abra expand_with_subscriber.py
+  - Clique no botao Play (canto superior direito)
+  - Ou pressione Ctrl+F5
+
+Python Direto:
+  - Terminal/CMD: python expand_with_subscriber.py
+
+================================================================================
+VERIFICAÇÃO DE RESULTADOS
+================================================================================
+
+SQL no Supabase:
+  SELECT COUNT(*) FROM appointments;
+  SELECT COUNT(*) FROM invoices;
+  SELECT COUNT(*) FROM payments;
+  SELECT COUNT(*) FROM professionals;
+
+Esperado:
+  - Profissionais: 140 (ja carregado antes)
+  - Agendamentos: ?? (depende dos dados)
+  - Faturas: ?? (depende dos dados)
+  - Pagamentos: ?? (depende dos dados)
+
+================================================================================
+PROXIMOS PASSOS
+================================================================================
+
+1. Executar expand_with_subscriber.py
+2. Verificar quantidade de registros carregados
+3. Validar dados no Supabase
+4. Configurar sincronizacao incremental
+5. Agendar jobs automáticos de sincronizacao
+
+================================================================================
+SUPORTE
+================================================================================
+
+Documentacao Detalhada:
+  - API_PARAMETERS_ANALYSIS.md
+  - RESUMO_ANALISE_PNG.md
+  - EXECUTAR_ETL.md
+
+Scripts de Teste:
+  - test_corrected_params.py (valida parametros)
+  - expand_with_subscriber.py (carrega dados)
+
+Problemas:
+  - Consulte CLINICORP_API_SUPPORT_REQUEST.md
+  - Ou envie para suporte@clinicorp.com
+
+================================================================================
+Arquivo criado: 2026-06-09
+Baseado em: Analise das PNG de https://api.clinicorp.com/api-docs/
+================================================================================

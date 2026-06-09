@@ -1,0 +1,104 @@
+================================================================================
+COMO ENVIAR O DOCUMENTO PARA O SUPORTE DO CLINICORP
+================================================================================
+
+PASSO 1: COPIAR O CONTEÚDO
+================================================================================
+
+1. Abra o arquivo: C:\projetos_praxis\Clinicorp\CLINICORP_API_SUPPORT_REQUEST.md
+2. Selecione TUDO (Ctrl+A)
+3. Copie (Ctrl+C)
+
+Ou acesse o arquivo em:
+  Arquivo: CLINICORP_API_SUPPORT_REQUEST.md
+  Tamanho: ~3KB
+
+PASSO 2: ENVIAR EMAIL
+================================================================================
+
+PARA:            suporte@clinicorp.com
+CÓPIA (CC):      (seu email)
+ASSUNTO:         [INTEGRAÇÃO API] Dúvidas sobre endpoints com subscriber_id
+
+CORPO DO EMAIL:
+================================================================================
+
+Olá,
+
+Estamos desenvolvendo uma integração entre o Clinicorp e um banco de dados
+externo (Supabase) para sincronizar dados operacionais em tempo real.
+
+A maioria dos endpoints está funcionando, mas temos dúvidas sobre alguns
+específicos que requerem subscriber_id e parâmetros de data.
+
+Seguem em anexo os detalhes técnicos da solicitação.
+
+Informações da Conta:
+- Conta: Praxis
+- Subscriber ID: praxis
+- Business ID: 5292365675823104
+- Usuario API: praxis
+
+Ficamos no aguardo do retorno.
+
+Obrigado,
+[Seu Nome/Empresa]
+joaorego2005@gmail.com
+
+[COLE O CONTEÚDO DO ARQUIVO AQUI]
+
+================================================================================
+
+PASSO 3: ALTERNATIVAS DE ENVIO
+================================================================================
+
+Opção A - Email (Recomendado)
+  Para: suporte@clinicorp.com
+  Assunto: [INTEGRAÇÃO API] Dúvidas sobre endpoints
+
+Opção B - Portal de Suporte
+  Acesse: https://clinicorp.com/suporte
+  Selecione: "Integração" ou "API"
+  Cole o conteúdo
+
+Opção C - Chat de Suporte
+  Se disponível em: https://clinicorp.com
+  Mencione: "Preciso de ajuda com integração API"
+
+================================================================================
+
+PASSO 4: ACOMPANHAMENTO
+================================================================================
+
+Após enviar, você provavelmente receberá:
+
+1. Uma resposta automática com número do ticket
+2. Um email com informações solicitadas (dentro de 24-48 horas)
+
+Se não receber resposta em 48 horas:
+  - Reenvie o email
+  - Mencione: "Solicitação técnica de integração API"
+
+================================================================================
+
+O QUE FAZER APÓS RECEBER A RESPOSTA
+================================================================================
+
+1. Copie as informações de resposta do suporte
+2. Abra o arquivo: expand_with_subscriber.py
+3. Atualize os endpoints conforme as dicas do suporte
+4. Execute novamente para carregar os dados
+
+Ou me envie a resposta e eu atualizo o script para você!
+
+================================================================================
+
+DÚVIDAS?
+================================================================================
+
+Se precisar de ajuda:
+- Abra o arquivo CLINICORP_API_SUPPORT_REQUEST.md com um editor de texto
+- Adicione comentários suas dúvidas adicionais
+- Envie para o suporte
+
+================================================================================

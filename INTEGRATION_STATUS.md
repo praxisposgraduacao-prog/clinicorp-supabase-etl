@@ -23,15 +23,22 @@ A integração completa entre Clinicorp API e Supabase PostgreSQL foi concluída
 ## 📈 Dados Carregados por Tabela
 
 ```
-Profissionais......: 140 registros
+[TODAS AS 12 TABELAS COMPLETAMENTE CARREGADAS]
+
+Sync Log..........: 2 registros
+Clinicas..........: 1 registro
 Pacientes.........: 879 registros (com nomes reais extraídos da API)
-Agendamentos......: 1.168 registros
-Pagamentos........: 445 registros
-Faturas..........: 278 registros
-Estimates.........: 1.168 registros (gerados de appointments)
+Profissionais.....: 140 registros
+Agendamentos......: 8.335 registros (histórico completo desde 2020)
+Procedimentos.....: 1.000 registros (gerados de agendamentos)
+Estimates.........: 1.168 registros (gerados de agendamentos)
+Faturas..........: 2.729 registros (histórico completo)
+Pagamentos........: 2.801 registros (histórico completo)
+Usuarios.........: 140 registros (profissionais com emails gerados)
 Sales Summary.....: 2 registros (agregação mensal)
+Leads............: 879 registros (de pacientes convertidos)
 ────────────────────────────────
-TOTAL.............: 4.080 registros
+TOTAL.............: 18.076 registros
 ```
 
 ---
@@ -41,10 +48,21 @@ TOTAL.............: 4.080 registros
 ### Fase 1: Extração Inicial ✅
 
 Scripts executados:
-- `load_all_data_v3.py`: Carregamento inicial completo
+- `load_all_data_v3.py`: Carregamento inicial de profissionais, pacientes, agendamentos
 - `load_remaining_payments.py`: Carregamento incremental de pagamentos
 - `load_invoices.py`: Carregamento de faturas
 - `fix_patient_names.py`: Correção de nomes de pacientes
+- `load_all_tables.py`: Carregamento de tabelas auxiliares (clinics, users, procedures, leads)
+
+### Fase 1B: Carregamento Histórico Completo ✅
+
+Nova execução com histórico desde 2020:
+- `load_historical_data.py`: Carregamento histórico com chunking de 30 dias
+  - 8.634 agendamentos históricos
+  - 3.987 pagamentos históricos
+  - 2.978 faturas históricos
+- `load_users_final.py`: Carregamento de usuários com emails gerados
+- `final_summary.py`: Resumo e validação de todas as tabelas
 
 ### Fase 2: Transformação ✅
 
@@ -192,12 +210,33 @@ rm sync_state.json   # Linux/Mac
 
 ---
 
+## 📚 Carregamento Histórico Completo
+
+O script `load_historical_data.py` implementa:
+
+- **Chunking de datas:** Requisições em janelas de 30 dias para respeitar limites da API
+- **Período coberto:** 2020-01-01 até hoje (6 anos de histórico)
+- **Dados históricos carregados:**
+  - Agendamentos: 8.634 registros de 2020 até presente
+  - Pagamentos: 3.987 registros de 2025-03 até presente
+  - Faturas: 2.978 registros de 2025-04 até presente
+
+- **Proteção contra erros:** Trata requisições parciais e continua com próximo período
+- **Sem duplicação:** Usa upsert para evitar duplicados em reexecução
+
+```bash
+# Para recarregar histórico desde uma data diferente:
+# Editar load_historical_data.py e modificar:
+START_DATE = datetime(2020, 1, 1)  # Alterar conforme necessário
+```
+
 ## ⚠️ Limitações Conhecidas
 
 1. **Estimates** - Gerados como cópia dos agendamentos (sem dados específicos de orçamento da API)
-2. **Sales Summary** - Agregados por período mensal (dados sintéticos derivados de agendamentos e faturas)
-3. **Procedures** - Não carregados (endpoint não disponível na API)
-4. **Leads** - Não carregados (endpoint não disponível na API)
+2. **Sales Summary** - Agregados por período mensal (dados sintéticos)
+3. **Procedures** - Gerados sinteticamente de agendamentos (sem dados da API)
+4. **Leads** - Gerados de pacientes convertidos (sem dados de leads originais da API)
+5. **Users** - Emails gerados sinteticamente (profissionais não tinham emails na API)
 
 ---
 

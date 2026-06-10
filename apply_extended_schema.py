@@ -20,7 +20,7 @@ print("=" * 80)
 
 # Ler arquivo SQL
 try:
-    with open('schema_extended.sql', 'r') as f:
+    with open('schema_extended.sql', 'r', encoding='utf-8') as f:
         schema_sql = f.read()
     print("\n[OK] Schema SQL lido\n")
 except Exception as e:

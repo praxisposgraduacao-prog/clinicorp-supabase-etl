@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Sincronização Incremental - Carrega apenas dados novos/modificados
-Executa apenas deltas desde a última sincronização
+Sincronizacao Incremental - Clinicorp -> Supabase
+Ordem: patients -> professionals -> appointments -> payments -> invoices
 """
 
 import os
+import json
+import time
 from dotenv import load_dotenv
 import requests
 from requests.auth import HTTPBasicAuth
 from supabase import create_client
-from datetime import datetime, timedelta
-import json
+from datetime import datetime, timedelta, timezone
 
 load_dotenv()
 
@@ -19,24 +20,48 @@ API_USER = os.getenv("ERP_CLINICORP_USUARIO_API", "praxis")
 API_PASS = os.getenv("ERP_CLINICORP_API_SENHA", "")
 BUSINESS_ID = int(os.getenv("ERP_CLINICORP_BUSINESS_ID", "5292365675823104"))
 SUBSCRIBER_ID = os.getenv("ERP_CLINICORP_SUBSCRIBER_ID", "praxis")
-
 SUPABASE_URL = os.getenv("ERP_CLINICORP_URL", "")
 SUPABASE_KEY = os.getenv("ERP_SERVICE_ROLE", "")
 
-# Arquivo para rastrear última sincronização
 SYNC_STATE_FILE = "sync_state.json"
-
-print("=" * 80)
-print("SINCRONIZACAO INCREMENTAL - CLINICORP")
-print("=" * 80)
+BATCH_SIZE = 50
 
 client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ============================================================================
-# CARREGAR ESTADO ANTERIOR
-# ============================================================================
+now_utc = datetime.now(timezone.utc).isoformat()
 
-print("\n[1] CARREGANDO ESTADO ANTERIOR...")
+
+def upsert_batch(table, data, conflict_col='id'):
+    """Upsert em lotes, retorna (inseridos, erros)."""
+    if not data:
+        return 0, 0
+    total_ok = 0
+    total_err = 0
+    for i in range(0, len(data), BATCH_SIZE):
+        batch = data[i:i + BATCH_SIZE]
+        # deduplicate by conflict_col within batch
+        seen = {}
+        deduped = []
+        for r in batch:
+            k = r.get(conflict_col)
+            if k not in seen:
+                seen[k] = True
+                deduped.append(r)
+        try:
+            client.table(table).upsert(deduped, on_conflict=conflict_col).execute()
+            total_ok += len(deduped)
+        except Exception as e:
+            print(f"    [BATCH ERROR] {e}")
+            total_err += len(deduped)
+    return total_ok, total_err
+
+
+print("=" * 70)
+print("SINCRONIZACAO INCREMENTAL - CLINICORP")
+print("=" * 70)
+
+# ── [1] ESTADO ────────────────────────────────────────────────────────────────
+print("\n[1] Carregando estado anterior...")
 
 sync_state = {
     'last_sync': (datetime.now() - timedelta(days=1)).isoformat(),
@@ -49,161 +74,289 @@ if os.path.exists(SYNC_STATE_FILE):
     try:
         with open(SYNC_STATE_FILE, 'r') as f:
             sync_state = json.load(f)
-        print(f"    Última sincronização: {sync_state['last_sync']}\n")
-    except:
-        print(f"    Arquivo corrompido, usando padrão\n")
+        print(f"    Ultima sincronizacao: {sync_state['last_sync']}")
+    except Exception:
+        print("    Arquivo corrompido, usando padrao")
 else:
-    print(f"    Primeira sincronização (padrão: últimas 24 horas)\n")
+    print("    Primeira sincronizacao (ultimas 24h)")
 
-# Converter para datetime
 try:
     last_sync_dt = datetime.fromisoformat(sync_state['last_sync'])
-except:
+except Exception:
     last_sync_dt = datetime.now() - timedelta(days=1)
 
-# Data para consulta
 date_from = last_sync_dt.strftime("%Y-%m-%d")
 date_to = datetime.now().strftime("%Y-%m-%d")
+print(f"    Periodo: {date_from} a {date_to}")
 
-print(f"[2] PERIODO DE SINCRONIZACAO: {date_from} a {date_to}\n")
-
-# ============================================================================
-# SINCRONIZAR AGENDAMENTOS
-# ============================================================================
-
-print("[3] SINCRONIZANDO AGENDAMENTOS...")
+# ── [2] PATIENTS ──────────────────────────────────────────────────────────────
+print("\n[2] Sincronizando patients...")
 
 try:
-    response = requests.get(
+    resp = requests.get(
+        f"{API_URL}/patient/birthdays",
+        params={'subscriber_id': SUBSCRIBER_ID},
+        auth=HTTPBasicAuth(API_USER, API_PASS),
+        timeout=30
+    )
+    if resp.status_code == 200:
+        birthdays = resp.json() or []
+        print(f"    API retornou {len(birthdays)} registros")
+
+        existing_ids = {r['id'] for r in client.table('patients').select('id').execute().data}
+
+        new_patients = []
+        for bday in birthdays:
+            pid = bday.get('PatientId')
+            if pid and pid not in existing_ids:
+                new_patients.append({
+                    'id': pid,
+                    'clinic_id': BUSINESS_ID,
+                    'full_name': bday.get('Name') or f'Patient {pid}',
+                    'date_of_birth': bday.get('BirthDate'),
+                    'email': bday.get('Email') or '',
+                    'phone': bday.get('MobilePhone') or '',
+                    'status': 'active',
+                    'last_sync_at': now_utc,
+                })
+
+        if new_patients:
+            ok, err = upsert_batch('patients', new_patients)
+            print(f"    [OK] {ok} novos patients inseridos ({err} erros)")
+        else:
+            print("    Nenhum patient novo")
+    else:
+        print(f"    API erro: {resp.status_code} - {resp.text[:100]}")
+except Exception as e:
+    print(f"    [ERROR] {e}")
+
+# ── [3] PROFESSIONALS ─────────────────────────────────────────────────────────
+print("\n[3] Sincronizando professionals...")
+
+try:
+    resp = requests.get(
+        f"{API_URL}/professional/list_all_professionals",
+        params={'business_id': BUSINESS_ID},
+        auth=HTTPBasicAuth(API_USER, API_PASS),
+        timeout=30
+    )
+    if resp.status_code == 200:
+        professionals = resp.json() or []
+        print(f"    API retornou {len(professionals)} profissionais")
+
+        existing_prof_ids = {r['id'] for r in client.table('professionals').select('id').execute().data}
+
+        new_profs = []
+        for prof in professionals:
+            pid = prof.get('id')
+            if pid and pid not in existing_prof_ids:
+                new_profs.append({
+                    'id': pid,
+                    'clinic_id': BUSINESS_ID,
+                    'full_name': prof.get('name') or f'Professional {pid}',
+                    'cpf': prof.get('cpf'),
+                    'email': None,
+                    'phone': None,
+                    'license_number': None,
+                    'specialty': None,
+                    'status': 'active',
+                    'last_sync_at': now_utc,
+                })
+
+        if new_profs:
+            ok, err = upsert_batch('professionals', new_profs)
+            print(f"    [OK] {ok} novos professionals inseridos ({err} erros)")
+        else:
+            print("    Nenhum professional novo")
+    else:
+        print(f"    API erro: {resp.status_code} - {resp.text[:100]}")
+except Exception as e:
+    print(f"    [ERROR] {e}")
+
+# ── [4] APPOINTMENTS ──────────────────────────────────────────────────────────
+print("\n[4] Sincronizando agendamentos...")
+
+apt_ok = 0
+
+try:
+    resp = requests.get(
         f"{API_URL}/appointment/list",
         params={
             'subscriber_id': SUBSCRIBER_ID,
             'from': date_from,
             'to': date_to,
             'businessId': BUSINESS_ID,
-            'includeCanceled': True
+            'includeCanceled': True,
         },
         auth=HTTPBasicAuth(API_USER, API_PASS),
         timeout=30
     )
+    if resp.status_code == 200:
+        appointments = resp.json() or []
+        print(f"    API retornou {len(appointments)} agendamentos")
 
-    if response.status_code == 200:
-        appointments = response.json()
-        print(f"    API retornou: {len(appointments)} agendamentos\n")
+        valid_patients = {r['id'] for r in client.table('patients').select('id').execute().data}
+        valid_profs = {r['id'] for r in client.table('professionals').select('id').execute().data}
 
-        if len(appointments) > 0:
-            # Preparar dados
-            data = []
-            for apt in appointments:
-                data.append({
-                    'id': apt.get('id'),
+        # Inserir pacientes faltando usando PatientName do agendamento
+        fallback_patients = []
+        for apt in appointments:
+            pid = apt.get('Patient_PersonId')
+            if pid and pid not in valid_patients:
+                name = apt.get('PatientName') or apt.get('Name') or f'Patient {pid}'
+                fallback_patients.append({
+                    'id': pid,
                     'clinic_id': BUSINESS_ID,
-                    'patient_id': apt.get('Patient_PersonId'),
-                    'professional_id': apt.get('Dentist_PersonId') or apt.get('ScheduleToId'),
-                    'scheduled_date': apt.get('date'),
-                    'duration_minutes': 30,
-                    'status': apt.get('Status') or 'scheduled',
-                    'notes': apt.get('Notes'),
-                    'reason_cancellation': None,
-                    'updated_at': apt.get('Date'),
-                    'last_sync_at': datetime.utcnow().isoformat(),
+                    'full_name': name,
+                    'status': 'active',
+                    'last_sync_at': now_utc,
                 })
+                valid_patients.add(pid)
 
-            # Upsert
-            try:
-                client.table('appointments').upsert(data, on_conflict='id').execute()
-                sync_state['appointments_count'] += len(data)
-                print(f"    [OK] {len(data)} agendamentos sincronizados")
-            except Exception as e:
-                print(f"    [ERROR] {str(e)[:80]}")
+        if fallback_patients:
+            ok, err = upsert_batch('patients', fallback_patients)
+            print(f"    [FALLBACK] {ok} pacientes inseridos via nome do agendamento ({err} erros)")
 
+        data = []
+        for apt in appointments:
+            pid = apt.get('Patient_PersonId')
+            proid = apt.get('Dentist_PersonId') or apt.get('ScheduleToId')
+
+            if not pid or pid not in valid_patients:
+                continue
+
+            if proid and proid not in valid_profs:
+                proid = None
+
+            data.append({
+                'id': apt.get('id'),
+                'clinic_id': BUSINESS_ID,
+                'patient_id': pid,
+                'professional_id': proid,
+                'scheduled_date': apt.get('date'),
+                'duration_minutes': 30,
+                'status': apt.get('Status') or 'scheduled',
+                'notes': apt.get('Notes'),
+                'reason_cancellation': None,
+                'updated_at': apt.get('Date'),
+                'last_sync_at': now_utc,
+            })
+
+        if data:
+            ok, err = upsert_batch('appointments', data)
+            apt_ok = ok
+            sync_state['appointments_count'] += ok
+            print(f"    [OK] {ok} agendamentos sincronizados ({err} erros)")
+        else:
+            print("    Nenhum agendamento para sincronizar")
+    else:
+        print(f"    API erro: {resp.status_code} - {resp.text[:100]}")
 except Exception as e:
-    print(f"    [ERROR] {str(e)[:100]}\n")
+    print(f"    [ERROR] {e}")
 
-# ============================================================================
-# SINCRONIZAR PAGAMENTOS
-# ============================================================================
-
-print("\n[4] SINCRONIZANDO PAGAMENTOS...")
+# ── [5] PAYMENTS ──────────────────────────────────────────────────────────────
+print("\n[5] Sincronizando pagamentos...")
 
 try:
-    response = requests.get(
+    resp = requests.get(
         f"{API_URL}/payment/list",
-        params={
-            'subscriber_id': SUBSCRIBER_ID,
-            'from': date_from,
-            'to': date_to,
-        },
+        params={'subscriber_id': SUBSCRIBER_ID, 'from': date_from, 'to': date_to},
         auth=HTTPBasicAuth(API_USER, API_PASS),
         timeout=30
     )
+    if resp.status_code == 200:
+        payments = resp.json() or []
+        print(f"    API retornou {len(payments)} pagamentos")
 
-    if response.status_code == 200:
-        payments = response.json()
-        print(f"    API retornou: {len(payments)} pagamentos\n")
+        valid_patients = {r['id'] for r in client.table('patients').select('id').execute().data}
 
-        if len(payments) > 0:
-            # Preparar dados
-            data = []
-            for pay in payments:
-                data.append({
-                    'id': pay.get('PaymentHeaderId'),
+        # Inserir pacientes faltando usando nome do pagamento
+        fallback_patients = []
+        for pay in payments:
+            pid = pay.get('PatientId')
+            if pid and pid not in valid_patients:
+                name = pay.get('PatientName') or pay.get('OwnerName') or pay.get('PayerName') or f'Patient {pid}'
+                fallback_patients.append({
+                    'id': pid,
                     'clinic_id': pay.get('ReceiverBusinessId', BUSINESS_ID),
-                    'invoice_id': None,
-                    'patient_id': pay.get('PatientId'),
-                    'amount': float(pay.get('Amount', 0)),
-                    'payment_method': pay.get('CreditCardType') or 'unknown',
-                    'payment_date': pay.get('PaymentDate'),
-                    'reference': pay.get('ExternalId') or '',
-                    'status': 'completed' if pay.get('PaymentReceived') == 'X' else 'pending',
-                    'notes': pay.get('PayerName') or '',
-                    'updated_at': pay.get('ConfirmedDate') or datetime.utcnow().isoformat(),
-                    'last_sync_at': datetime.utcnow().isoformat(),
+                    'full_name': name,
+                    'status': 'active',
+                    'last_sync_at': now_utc,
                 })
+                valid_patients.add(pid)
 
-            # Upsert
-            try:
-                client.table('payments').upsert(data, on_conflict='id').execute()
-                sync_state['payments_count'] += len(data)
-                print(f"    [OK] {len(data)} pagamentos sincronizados")
-            except Exception as e:
-                print(f"    [ERROR] {str(e)[:80]}")
+        if fallback_patients:
+            ok, err = upsert_batch('patients', fallback_patients)
+            print(f"    [FALLBACK] {ok} pacientes inseridos via nome do pagamento ({err} erros)")
 
+        data = []
+        for pay in payments:
+            pid = pay.get('PatientId')
+            cid = pay.get('ReceiverBusinessId', BUSINESS_ID)
+
+            if not pid or pid not in valid_patients:
+                continue
+
+            data.append({
+                'id': pay.get('PaymentHeaderId'),
+                'clinic_id': cid,
+                'invoice_id': None,
+                'patient_id': pid,
+                'amount': float(pay.get('Amount', 0)),
+                'payment_method': pay.get('CreditCardType') or 'unknown',
+                'payment_date': pay.get('PaymentDate'),
+                'reference': pay.get('ExternalId') or '',
+                'status': 'completed' if pay.get('PaymentReceived') == 'X' else 'pending',
+                'notes': pay.get('PayerName') or '',
+                'updated_at': pay.get('ConfirmedDate') or now_utc,
+                'last_sync_at': now_utc,
+            })
+
+        if data:
+            ok, err = upsert_batch('payments', data)
+            sync_state['payments_count'] += ok
+            print(f"    [OK] {ok} pagamentos sincronizados ({err} erros)")
+        else:
+            print(f"    Nenhum pagamento valido ({pay_skipped} ignorados por FK)")
+    else:
+        print(f"    API erro: {resp.status_code} - {resp.text[:100]}")
 except Exception as e:
-    print(f"    [ERROR] {str(e)[:100]}\n")
+    print(f"    [ERROR] {e}")
 
-# ============================================================================
-# SINCRONIZAR FATURAS
-# ============================================================================
-
-print("\n[5] SINCRONIZANDO FATURAS...")
+# ── [6] INVOICES ──────────────────────────────────────────────────────────────
+print("\n[6] Sincronizando faturas...")
 
 try:
-    response = requests.get(
+    resp = requests.get(
         f"{API_URL}/financial/list_invoices",
         params={
             'subscriber_id': SUBSCRIBER_ID,
             'from': date_from,
             'to': date_to,
-            'business_id': BUSINESS_ID
+            'business_id': BUSINESS_ID,
         },
         auth=HTTPBasicAuth(API_USER, API_PASS),
         timeout=30
     )
+    if resp.status_code == 200:
+        invoices = resp.json() or []
+        print(f"    API retornou {len(invoices)} faturas")
 
-    if response.status_code == 200:
-        invoices = response.json()
-        print(f"    API retornou: {len(invoices)} faturas\n")
+        if invoices:
+            valid_patients = {r['id'] for r in client.table('patients').select('id').execute().data}
 
-        if len(invoices) > 0:
-            # Preparar dados
             data = []
+            inv_skipped = 0
             for inv in invoices:
+                pid = inv.get('PatientId')
+                if not pid or pid not in valid_patients:
+                    inv_skipped += 1
+                    continue
                 data.append({
                     'id': inv.get('InvoiceId'),
                     'clinic_id': BUSINESS_ID,
-                    'patient_id': inv.get('PatientId'),
-                    'number': inv.get('InvoiceId'),
+                    'patient_id': pid,
+                    'number': str(inv.get('InvoiceId')),
                     'total_amount': float(inv.get('Amount', 0)),
                     'paid_amount': 0,
                     'due_date': inv.get('Date'),
@@ -211,69 +364,50 @@ try:
                     'status': inv.get('Status', 'issued'),
                     'payment_method': None,
                     'updated_at': inv.get('Date'),
-                    'last_sync_at': datetime.utcnow().isoformat(),
+                    'last_sync_at': now_utc,
                 })
 
-            # Upsert
-            try:
-                client.table('invoices').upsert(data, on_conflict='id').execute()
-                sync_state['invoices_count'] += len(data)
-                print(f"    [OK] {len(data)} faturas sincronizadas")
-            except Exception as e:
-                print(f"    [ERROR] {str(e)[:80]}")
-
+            if data:
+                ok, err = upsert_batch('invoices', data)
+                sync_state['invoices_count'] += ok
+                print(f"    [OK] {ok} faturas sincronizadas ({err} erros, {inv_skipped} ignoradas por FK)")
+            else:
+                print(f"    Nenhuma fatura valida ({inv_skipped} ignoradas por FK)")
+    else:
+        print(f"    API erro: {resp.status_code} - {resp.text[:100]}")
 except Exception as e:
-    print(f"    [ERROR] {str(e)[:100]}\n")
+    print(f"    [ERROR] {e}")
 
-# ============================================================================
-# SALVAR ESTADO
-# ============================================================================
-
-print("\n[6] SALVANDO ESTADO...")
+# ── [7] SALVAR ESTADO ─────────────────────────────────────────────────────────
+print("\n[7] Salvando estado...")
 
 sync_state['last_sync'] = datetime.now().isoformat()
-
 with open(SYNC_STATE_FILE, 'w') as f:
     json.dump(sync_state, f, indent=2)
+print("    [OK] Estado salvo")
 
-print(f"    [OK] Estado salvo\n")
-
-# ============================================================================
-# RESULTADO
-# ============================================================================
-
-print("=" * 80)
-print("RESULTADO DA SINCRONIZACAO")
-print("=" * 80)
+# ── RESULTADO ─────────────────────────────────────────────────────────────────
+print("\n" + "=" * 70)
+print("RESULTADO")
+print("=" * 70)
 
 try:
-    apt = client.table('appointments').select('id', count='exact').execute().count
-    pay = client.table('payments').select('id', count='exact').execute().count
-    inv = client.table('invoices').select('id', count='exact').execute().count
+    apt_total = client.table('appointments').select('id', count='exact').execute().count
+    pay_total = client.table('payments').select('id', count='exact').execute().count
+    inv_total = client.table('invoices').select('id', count='exact').execute().count
 
-    print(f"\n[DADOS SINCRONIZADOS NESTA EXECUCAO]")
-    print(f"Agendamentos: +{sync_state['appointments_count']}")
-    print(f"Pagamentos: +{sync_state['payments_count']}")
-    print(f"Faturas: +{sync_state['invoices_count']}")
+    print(f"\nSincronizados nesta execucao:")
+    print(f"  Agendamentos: +{sync_state['appointments_count']}")
+    print(f"  Pagamentos:   +{sync_state['payments_count']}")
+    print(f"  Faturas:      +{sync_state['invoices_count']}")
 
-    total_sync = (sync_state['appointments_count'] +
-                  sync_state['payments_count'] +
-                  sync_state['invoices_count'])
-
-    print(f"\n[TOTAL ADICIONADO]: {total_sync} registros\n")
-
-    print(f"[ESTADO ATUAL DO BANCO]")
-    print(f"Agendamentos: {apt}")
-    print(f"Pagamentos: {pay}")
-    print(f"Faturas: {inv}")
-
-    print(f"\n[PROXIMA SINCRONIZACAO]")
-    print(f"Última sincronização: {sync_state['last_sync']}")
-    print(f"Período próximo: {sync_state['last_sync']} a [data próxima sincronização]")
-
+    print(f"\nTotal no banco:")
+    print(f"  Agendamentos: {apt_total}")
+    print(f"  Pagamentos:   {pay_total}")
+    print(f"  Faturas:      {inv_total}")
 except Exception as e:
-    print(f"Erro: {str(e)[:80]}")
+    print(f"Erro ao contar: {e}")
 
-print("\n" + "=" * 80)
-print("Sincronização incremental concluída com sucesso!")
-print("=" * 80 + "\n")
+print("\n" + "=" * 70)
+print("Sincronizacao concluida!")
+print("=" * 70)

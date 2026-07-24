@@ -126,30 +126,29 @@ try:
         print(f"    API retornou {len(professionals)} profissionais")
 
         existing_prof_ids = db_client.select_ids('professionals')
+        existing_cpfs = db_client.select_col('professionals', 'cpf')
 
         new_profs = []
+        seen_cpf = {}
         for prof in professionals:
             pid = prof.get('id')
-            if pid and pid not in existing_prof_ids:
-                new_profs.append({
+            cpf = prof.get('cpf')
+            if pid and pid not in existing_prof_ids and cpf not in existing_cpfs:
+                seen_cpf[cpf] = {
                     'id': pid,
                     'clinic_id': BUSINESS_ID,
                     'full_name': prof.get('name') or f'Professional {pid}',
-                    'cpf': prof.get('cpf'),
+                    'cpf': cpf,
                     'email': None,
                     'phone': None,
                     'license_number': None,
                     'specialty': None,
                     'status': 'active',
                     'last_sync_at': now_utc,
-                })
+                }
+        new_profs = list(seen_cpf.values())
 
         if new_profs:
-            # dedup by cpf — keep last occurrence to avoid UNIQUE violation in batch
-            seen_cpf = {}
-            for p in new_profs:
-                seen_cpf[p['cpf']] = p
-            new_profs = list(seen_cpf.values())
             ok, err = upsert_batch('professionals', new_profs)
             print(f"    [OK] {ok} novos professionals inseridos ({err} erros)")
         else:

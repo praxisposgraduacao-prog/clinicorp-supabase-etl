@@ -25,3 +25,6 @@ Thumbs.db
 
 # Locks (scheduled tasks)
 .claude/scheduled_tasks.lock
+
+# Superpowers workspace
+.superpowers/

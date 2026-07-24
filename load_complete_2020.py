@@ -8,10 +8,10 @@ import os
 from dotenv import load_dotenv
 import requests
 from requests.auth import HTTPBasicAuth
-from supabase import create_client
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import uuid as uuid_lib
 import time
+import db_client
 
 load_dotenv()
 
@@ -21,14 +21,9 @@ API_PASS = os.getenv("ERP_CLINICORP_API_SENHA", "")
 BUSINESS_ID = int(os.getenv("ERP_CLINICORP_BUSINESS_ID", "5292365675823104"))
 SUBSCRIBER_ID = os.getenv("ERP_CLINICORP_SUBSCRIBER_ID", "praxis")
 
-SUPABASE_URL = os.getenv("ERP_CLINICORP_URL", "")
-SUPABASE_KEY = os.getenv("ERP_SERVICE_ROLE", "")
-
 print("=" * 80)
 print("CARREGAMENTO COMPLETO 2020-2026 - 100% DOS DADOS")
 print("=" * 80)
-
-client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 START_DATE = datetime(2020, 1, 1)
 END_DATE = datetime.now()
@@ -39,6 +34,38 @@ RETRY_DELAY = 2
 
 total_loaded = 0
 total_errors = 0
+
+_cached_patient_ids = None
+_cached_prof_ids = None
+
+def get_patient_ids():
+    global _cached_patient_ids
+    if _cached_patient_ids is None:
+        _cached_patient_ids = db_client.select_ids('patients')
+    return _cached_patient_ids
+
+def get_prof_ids():
+    global _cached_prof_ids
+    if _cached_prof_ids is None:
+        _cached_prof_ids = db_client.select_ids('professionals')
+    return _cached_prof_ids
+
+def ensure_patients(id_name_map):
+    """Insert fallback patient records for any IDs not yet in DB."""
+    existing = get_patient_ids()
+    now = datetime.now(timezone.utc).isoformat()
+    missing = [
+        {'id': pid, 'clinic_id': BUSINESS_ID, 'full_name': name or f'Patient {pid}',
+         'status': 'active', 'last_sync_at': now}
+        for pid, name in id_name_map.items()
+        if pid and pid not in existing
+    ]
+    if missing:
+        try:
+            db_client.upsert('patients', missing, conflict_col='id')
+            existing.update(r['id'] for r in missing)
+        except Exception as e:
+            print(f"        [WARN] fallback patients: {str(e)[:80]}")
 
 def serialize_value(value):
     """Serializar valores para JSON-compatible"""
@@ -52,7 +79,7 @@ def serialize_value(value):
         return value
 
 def safe_upsert(table_name, data, key='id', retry=0):
-    """Upsert com retry logic"""
+    """Upsert com retry logic usando psycopg2"""
     try:
         if not data or len(data) == 0:
             return 0, 0
@@ -64,8 +91,19 @@ def safe_upsert(table_name, data, key='id', retry=0):
                 clean_record[k] = serialize_value(v)
             cleaned.append(clean_record)
 
-        client.table(table_name).upsert(cleaned, on_conflict=key).execute()
-        return len(cleaned), 0
+        # Filtrar registros com ID nulo e deduplicar por ID no batch
+        seen = {}
+        for r in cleaned:
+            rid = r.get(key)
+            if rid is not None:
+                seen[rid] = r
+        cleaned = list(seen.values())
+
+        if not cleaned:
+            return 0, 0
+
+        n = db_client.upsert(table_name, cleaned, conflict_col=key)
+        return n, 0
 
     except Exception as e:
         error_str = str(e)
@@ -115,20 +153,33 @@ for start, end in date_range_chunks(START_DATE, END_DATE, CHUNK_DAYS):
             appointments = response.json()
 
             if appointments:
+                # Garantir que todos os pacientes existam antes de inserir
+                id_name = {apt.get('Patient_PersonId'): apt.get('PatientName') or apt.get('Name') for apt in appointments if apt.get('Patient_PersonId')}
+                ensure_patients(id_name)
+
+                valid_patients = get_patient_ids()
+                valid_profs = get_prof_ids()
+
                 data = []
                 for apt in appointments:
+                    pid = apt.get('Patient_PersonId')
+                    if not pid or pid not in valid_patients:
+                        continue
+                    proid = apt.get('Dentist_PersonId') or apt.get('ScheduleToId')
+                    if proid and proid not in valid_profs:
+                        proid = None
                     data.append({
                         'id': apt.get('id'),
                         'clinic_id': BUSINESS_ID,
-                        'patient_id': apt.get('Patient_PersonId'),
-                        'professional_id': apt.get('Dentist_PersonId') or apt.get('ScheduleToId'),
+                        'patient_id': pid,
+                        'professional_id': proid,
                         'scheduled_date': apt.get('date'),
                         'duration_minutes': 30,
                         'status': apt.get('Status') or 'scheduled',
                         'notes': apt.get('Notes'),
                         'reason_cancellation': None,
                         'updated_at': apt.get('Date'),
-                        'last_sync_at': datetime.utcnow().isoformat(),
+                        'last_sync_at': datetime.now(timezone.utc).isoformat(),
                     })
 
                 # Inserir em lotes pequenos
@@ -171,21 +222,30 @@ for start, end in date_range_chunks(START_DATE, END_DATE, CHUNK_DAYS):
             payments = response.json()
 
             if payments:
+                # Garantir que todos os pacientes existam
+                id_name = {pay.get('PatientId'): pay.get('PatientName') or pay.get('PayerName') or pay.get('OwnerName') for pay in payments if pay.get('PatientId')}
+                ensure_patients(id_name)
+
+                valid_patients = get_patient_ids()
+
                 data = []
                 for pay in payments:
+                    pid = pay.get('PatientId')
+                    if not pid or pid not in valid_patients:
+                        continue
                     data.append({
                         'id': pay.get('PaymentHeaderId'),
                         'clinic_id': pay.get('ReceiverBusinessId', BUSINESS_ID),
                         'invoice_id': None,
-                        'patient_id': pay.get('PatientId'),
+                        'patient_id': pid,
                         'amount': float(pay.get('Amount', 0)),
                         'payment_method': pay.get('CreditCardType') or 'unknown',
                         'payment_date': pay.get('PaymentDate'),
                         'reference': pay.get('ExternalId') or '',
                         'status': 'completed' if pay.get('PaymentReceived') == 'X' else 'pending',
                         'notes': pay.get('PayerName') or '',
-                        'updated_at': pay.get('ConfirmedDate') or datetime.utcnow().isoformat(),
-                        'last_sync_at': datetime.utcnow().isoformat(),
+                        'updated_at': pay.get('ConfirmedDate') or datetime.now(timezone.utc).isoformat(),
+                        'last_sync_at': datetime.now(timezone.utc).isoformat(),
                     })
 
                 # Inserir em lotes pequenos
@@ -229,12 +289,21 @@ for start, end in date_range_chunks(START_DATE, END_DATE, CHUNK_DAYS):
             invoices = response.json()
 
             if invoices:
+                # Garantir que todos os pacientes existam
+                id_name = {inv.get('PatientId'): inv.get('PatientName') for inv in invoices if inv.get('PatientId')}
+                ensure_patients(id_name)
+
+                valid_patients = get_patient_ids()
+
                 data = []
                 for inv in invoices:
+                    pid = inv.get('PatientId')
+                    if not pid or pid not in valid_patients:
+                        continue
                     data.append({
                         'id': inv.get('InvoiceId'),
                         'clinic_id': BUSINESS_ID,
-                        'patient_id': inv.get('PatientId'),
+                        'patient_id': pid,
                         'number': str(inv.get('InvoiceId')),
                         'total_amount': float(inv.get('Amount', 0)),
                         'paid_amount': 0,
@@ -243,7 +312,7 @@ for start, end in date_range_chunks(START_DATE, END_DATE, CHUNK_DAYS):
                         'status': inv.get('Status', 'issued'),
                         'payment_method': None,
                         'updated_at': inv.get('Date'),
-                        'last_sync_at': datetime.utcnow().isoformat(),
+                        'last_sync_at': datetime.now(timezone.utc).isoformat(),
                     })
 
                 # Inserir em lotes pequenos
@@ -291,8 +360,8 @@ try:
                         'age': bd.get('Age'),
                         'birthday_month': birth_date.month,
                         'birthday_day': birth_date.day,
-                        'updated_at': datetime.utcnow().isoformat(),
-                        'last_sync_at': datetime.utcnow().isoformat(),
+                        'updated_at': datetime.now(timezone.utc).isoformat(),
+                        'last_sync_at': datetime.now(timezone.utc).isoformat(),
                     })
                 except:
                     pass
@@ -351,8 +420,8 @@ try:
                 'appointments_finished': int(ana.get('AppoinmentsFinished', 0)),
                 'appointments_missed': int(ana.get('AppointmentsMissed', 0)),
                 'unity_name': ana.get('UnityName'),
-                'updated_at': datetime.utcnow().isoformat(),
-                'last_sync_at': datetime.utcnow().isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+                'last_sync_at': datetime.now(timezone.utc).isoformat(),
             })
 
         if data:
@@ -396,12 +465,12 @@ try:
             data.append({
                 'id': str(uuid_lib.uuid4()),
                 'clinic_id': BUSINESS_ID,
-                'month': rev.get('month', ''),
+                'month': str(rev.get('month', ''))[:7],
                 'specialty': rev.get('Expertise', 'Unknown'),
                 'total_revenue': 0,
                 'procedures_count': 0,
-                'updated_at': datetime.utcnow().isoformat(),
-                'last_sync_at': datetime.utcnow().isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+                'last_sync_at': datetime.now(timezone.utc).isoformat(),
             })
 
         if data:
@@ -426,12 +495,12 @@ print("RESULTADO DO CARREGAMENTO COMPLETO")
 print("=" * 80)
 
 try:
-    apt_count = client.table('appointments').select('id', count='exact').execute().count or 0
-    pay_count = client.table('payments').select('id', count='exact').execute().count or 0
-    inv_count = client.table('invoices').select('id', count='exact').execute().count or 0
-    bd_count = client.table('patient_birthdays').select('id', count='exact').execute().count or 0
-    ana_count = client.table('analytics_results').select('id', count='exact').execute().count or 0
-    spec_count = client.table('revenue_by_specialty').select('id', count='exact').execute().count or 0
+    apt_count = db_client.count('appointments')
+    pay_count = db_client.count('payments')
+    inv_count = db_client.count('invoices')
+    bd_count  = db_client.count('patient_birthdays')
+    ana_count = db_client.count('analytics_results')
+    spec_count = db_client.count('revenue_by_specialty')
 
     print(f"\n[DADOS REAIS CARREGADOS AGORA]")
     print(f"Appointments........: {apt_count:,} registros")
@@ -444,12 +513,12 @@ try:
     print(f"TOTAL REAL NESTA SESSAO: {apt_count + pay_count + inv_count + bd_count + ana_count + spec_count:,} registros")
 
     # Resumo geral
-    pat = client.table('patients').select('id', count='exact').execute().count or 0
-    prof = client.table('professionals').select('id', count='exact').execute().count or 0
-    est = client.table('estimates').select('id', count='exact').execute().count or 0
-    pro = client.table('procedures').select('id', count='exact').execute().count or 0
-    led = client.table('leads').select('id', count='exact').execute().count or 0
-    usr = client.table('users').select('id', count='exact').execute().count or 0
+    pat  = db_client.count('patients')
+    prof = db_client.count('professionals')
+    est  = db_client.count('estimates')
+    pro  = db_client.count('procedures')
+    led  = db_client.count('leads')
+    usr  = db_client.count('users')
 
     print(f"\n[ESTADO ATUAL DO BANCO]")
     print(f"Patients..........: {pat:,}")

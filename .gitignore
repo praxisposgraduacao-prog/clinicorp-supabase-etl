@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Node / Frontend
+web/frontend/node_modules/
+web/frontend/dist/
+web/frontend/.vite/
+
+# Env
+.env
+.env.local
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Locks (scheduled tasks)
+.claude/scheduled_tasks.lock

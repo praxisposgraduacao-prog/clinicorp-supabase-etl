@@ -4,7 +4,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
@@ -20,8 +20,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -72,7 +72,14 @@ async def get_job(job_id: str, _: str = Depends(current_user)):
     return jobs[job_id]
 
 @app.websocket("/api/jobs/{job_id}/logs")
-async def job_logs(websocket: WebSocket, job_id: str):
+async def job_logs(websocket: WebSocket, job_id: str, token: str = Query(...)):
+    # Verify JWT before accepting — WebSocket clients pass token as ?token=<jwt>
+    try:
+        verify_token(token)
+    except Exception:
+        await websocket.close(code=4001)
+        return
+
     await websocket.accept()
     if job_id not in jobs:
         await websocket.close(code=4004)

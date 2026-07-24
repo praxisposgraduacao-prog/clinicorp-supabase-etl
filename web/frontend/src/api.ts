@@ -61,5 +61,6 @@ export async function startJob(type: string): Promise<string> {
 
 export function createLogSocket(jobId: string): WebSocket {
   const wsBase = (window.location.origin).replace(/^http/, "ws");
-  return new WebSocket(`${wsBase}/api/jobs/${jobId}/logs`);
+  const token = getToken() ?? "";
+  return new WebSocket(`${wsBase}/api/jobs/${jobId}/logs?token=${encodeURIComponent(token)}`);
 }

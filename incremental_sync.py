@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sincronizacao Incremental - Clinicorp -> Supabase
+Sincronizacao Incremental - Clinicorp -> PostgreSQL local
 Ordem: patients -> professionals -> appointments -> payments -> invoices
 """
 
@@ -10,7 +10,7 @@ import time
 from dotenv import load_dotenv
 import requests
 from requests.auth import HTTPBasicAuth
-from supabase import create_client
+import db_client
 from datetime import datetime, timedelta, timezone
 
 load_dotenv()
@@ -20,13 +20,9 @@ API_USER = os.getenv("ERP_CLINICORP_USUARIO_API", "praxis")
 API_PASS = os.getenv("ERP_CLINICORP_API_SENHA", "")
 BUSINESS_ID = int(os.getenv("ERP_CLINICORP_BUSINESS_ID", "5292365675823104"))
 SUBSCRIBER_ID = os.getenv("ERP_CLINICORP_SUBSCRIBER_ID", "praxis")
-SUPABASE_URL = os.getenv("ERP_CLINICORP_URL", "")
-SUPABASE_KEY = os.getenv("ERP_SERVICE_ROLE", "")
 
 SYNC_STATE_FILE = "sync_state.json"
 BATCH_SIZE = 50
-
-client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 now_utc = datetime.now(timezone.utc).isoformat()
 
@@ -35,25 +31,12 @@ def upsert_batch(table, data, conflict_col='id'):
     """Upsert em lotes, retorna (inseridos, erros)."""
     if not data:
         return 0, 0
-    total_ok = 0
-    total_err = 0
-    for i in range(0, len(data), BATCH_SIZE):
-        batch = data[i:i + BATCH_SIZE]
-        # deduplicate by conflict_col within batch
-        seen = {}
-        deduped = []
-        for r in batch:
-            k = r.get(conflict_col)
-            if k not in seen:
-                seen[k] = True
-                deduped.append(r)
-        try:
-            client.table(table).upsert(deduped, on_conflict=conflict_col).execute()
-            total_ok += len(deduped)
-        except Exception as e:
-            print(f"    [BATCH ERROR] {e}")
-            total_err += len(deduped)
-    return total_ok, total_err
+    try:
+        n = db_client.upsert(table, data, conflict_col)
+        return n, 0
+    except Exception as e:
+        print(f"    [BATCH ERROR] {e}")
+        return 0, len(data)
 
 
 print("=" * 70)
@@ -103,7 +86,7 @@ try:
         birthdays = resp.json() or []
         print(f"    API retornou {len(birthdays)} registros")
 
-        existing_ids = {r['id'] for r in client.table('patients').select('id').execute().data}
+        existing_ids = db_client.select_ids('patients')
 
         new_patients = []
         for bday in birthdays:
@@ -144,7 +127,7 @@ try:
         professionals = resp.json() or []
         print(f"    API retornou {len(professionals)} profissionais")
 
-        existing_prof_ids = {r['id'] for r in client.table('professionals').select('id').execute().data}
+        existing_prof_ids = db_client.select_ids('professionals')
 
         new_profs = []
         for prof in professionals:
@@ -195,8 +178,8 @@ try:
         appointments = resp.json() or []
         print(f"    API retornou {len(appointments)} agendamentos")
 
-        valid_patients = {r['id'] for r in client.table('patients').select('id').execute().data}
-        valid_profs = {r['id'] for r in client.table('professionals').select('id').execute().data}
+        valid_patients = db_client.select_ids('patients')
+        valid_profs = db_client.select_ids('professionals')
 
         # Inserir pacientes faltando usando PatientName do agendamento
         fallback_patients = []
@@ -268,7 +251,7 @@ try:
         payments = resp.json() or []
         print(f"    API retornou {len(payments)} pagamentos")
 
-        valid_patients = {r['id'] for r in client.table('patients').select('id').execute().data}
+        valid_patients = db_client.select_ids('patients')
 
         # Inserir pacientes faltando usando nome do pagamento
         fallback_patients = []
@@ -343,7 +326,7 @@ try:
         print(f"    API retornou {len(invoices)} faturas")
 
         if invoices:
-            valid_patients = {r['id'] for r in client.table('patients').select('id').execute().data}
+            valid_patients = db_client.select_ids('patients')
 
             data = []
             inv_skipped = 0
@@ -392,9 +375,9 @@ print("RESULTADO")
 print("=" * 70)
 
 try:
-    apt_total = client.table('appointments').select('id', count='exact').execute().count
-    pay_total = client.table('payments').select('id', count='exact').execute().count
-    inv_total = client.table('invoices').select('id', count='exact').execute().count
+    apt_total = db_client.count('appointments')
+    pay_total = db_client.count('payments')
+    inv_total = db_client.count('invoices')
 
     print(f"\nSincronizados nesta execucao:")
     print(f"  Agendamentos: +{sync_state['appointments_count']}")

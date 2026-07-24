@@ -5,7 +5,7 @@ Carrega profissionais diretamente com INSERT (ignorando duplicatas)
 
 import os
 from dotenv import load_dotenv
-from supabase import create_client
+import db_client
 import requests
 from requests.auth import HTTPBasicAuth
 
@@ -16,9 +16,6 @@ API_URL = os.getenv("ERP_CLINICORP_API_URL", "https://api.clinicorp.com") + "/re
 API_USER = os.getenv("ERP_CLINICORP_USUARIO_API", "praxis")
 API_PASS = os.getenv("ERP_CLINICORP_API_SENHA", "")
 BUSINESS_ID = int(os.getenv("ERP_CLINICORP_BUSINESS_ID", "5292365675823104"))
-
-SUPABASE_URL = os.getenv("ERP_CLINICORP_URL", "")
-SUPABASE_KEY = os.getenv("ERP_SERVICE_ROLE", "")
 
 print("=" * 80)
 print("CARREGANDO PROFISSIONAIS DO CLINICORP PARA SUPABASE")
@@ -66,46 +63,26 @@ for prof in professionals:
 
 print(f"    Dados preparados: {len(data_to_insert)} registros")
 
-# 3. Inserir no Supabase
-print("\n[3] Inserindo no Supabase...")
+# 3. Inserir no banco local
+print("\n[3] Inserindo no banco local...")
 try:
-    client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-    # Tentar INSERT com ignore duplicates
-    result = client.table('professionals').insert(data_to_insert, ignore_duplicates=True).execute()
-
-    print(f"    Sucesso! {len(result.data) if result.data else 'registros'} inseridos")
+    n = db_client.upsert('professionals', data_to_insert, conflict_col='id')
+    print(f"    Sucesso! {n} inseridos")
 
 except Exception as e:
     print(f"    Erro: {str(e)[:200]}")
-
-    # Tentar uma abordagem alternativa: deletar e inserir
-    print("\n[!] Tentando abordagem alternativa: deletar tudo e inserir...")
-    try:
-        # Deletar todos
-        del_result = client.table('professionals').delete().gte('id', 0).execute()
-        print(f"    Deletados: {len(del_result.data) if del_result.data else 0}")
-
-        # Inserir novamente
-        result = client.table('professionals').insert(data_to_insert).execute()
-        print(f"    Inseridos: {len(result.data) if result.data else 0}")
-
-    except Exception as e2:
-        print(f"    Erro na abordagem alternativa: {str(e2)[:200]}")
-        exit(1)
+    exit(1)
 
 # 4. Verificar
 print("\n[4] Verificando carga...")
 try:
-    client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    result = client.table('professionals').select('id', count='exact').execute()
-    total = result.count if hasattr(result, 'count') else len(result.data)
-    print(f"    Total no Supabase: {total} profissionais")
+    total = db_client.count('professionals')
+    print(f"    Total no banco: {total} profissionais")
 
     if total > 0:
-        print("\n✓ SUCESSO! Profissionais carregados com sucesso!")
+        print("\nSUCESSO! Profissionais carregados com sucesso!")
     else:
-        print("\n✗ Nenhum profissional foi carregado")
+        print("\nNenhum profissional foi carregado")
 
 except Exception as e:
     print(f"    Erro na verificação: {e}")

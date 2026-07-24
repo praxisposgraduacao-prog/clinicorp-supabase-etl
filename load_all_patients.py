@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv
 import requests
 from requests.auth import HTTPBasicAuth
-from supabase import create_client
+import db_client
 from datetime import datetime
 import time
 
@@ -19,11 +19,6 @@ API_USER = os.getenv("ERP_CLINICORP_USUARIO_API", "praxis")
 API_PASS = os.getenv("ERP_CLINICORP_API_SENHA", "")
 BUSINESS_ID = int(os.getenv("ERP_CLINICORP_BUSINESS_ID", "5292365675823104"))
 SUBSCRIBER_ID = os.getenv("ERP_CLINICORP_SUBSCRIBER_ID", "praxis")
-
-SUPABASE_URL = os.getenv("ERP_CLINICORP_URL", "")
-SUPABASE_KEY = os.getenv("ERP_SERVICE_ROLE", "")
-
-client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BATCH_SIZE = 50
 MAX_RETRIES = 3
@@ -41,38 +36,19 @@ def serialize_value(value):
 def safe_upsert(table_name, data, key='id', retry=0):
     """Upsert com retry logic"""
     try:
-        if not data or len(data) == 0:
+        if not data:
             return 0, 0
-
-        cleaned = []
         seen = {}
-        for record in data:
-            clean_record = {}
-            for k, v in record.items():
-                clean_record[k] = serialize_value(v)
-
-            # Avoid duplicates
-            record_key = clean_record.get(key)
-            if record_key not in seen:
-                seen[record_key] = True
-                cleaned.append(clean_record)
-
-        if not cleaned:
-            return 0, 0
-
-        client.table(table_name).upsert(cleaned, on_conflict=key).execute()
-        return len(cleaned), 0
-
+        cleaned = [r for r in data if r.get(key) not in seen and not seen.update({r.get(key): True})]
+        n = db_client.upsert(table_name, cleaned, key)
+        return n, 0
     except Exception as e:
-        error_str = str(e)
-
         if retry < MAX_RETRIES:
             print(f"        [RETRY {retry+1}/{MAX_RETRIES}] Aguardando {RETRY_DELAY}s...")
             time.sleep(RETRY_DELAY)
             return safe_upsert(table_name, data, key, retry + 1)
-        else:
-            print(f"        [ERROR] {error_str[:100]}")
-            return 0, len(data)
+        print(f"        [ERROR] {str(e)[:100]}")
+        return 0, len(data)
 
 print("=" * 80)
 print("CARREGAR TODOS OS PATIENTS DA API")
@@ -82,8 +58,7 @@ print("=" * 80)
 print("\n[1] Pacientes já carregados:\n")
 
 try:
-    result = client.table('patients').select('id').execute()
-    existing_patients = set([p['id'] for p in result.data])
+    existing_patients = db_client.select_ids('patients')
     print(f"    Total: {len(existing_patients)} pacientes já na base\n")
 except:
     existing_patients = set()

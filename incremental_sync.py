@@ -22,8 +22,6 @@ BUSINESS_ID = int(os.getenv("ERP_CLINICORP_BUSINESS_ID", "5292365675823104"))
 SUBSCRIBER_ID = os.getenv("ERP_CLINICORP_SUBSCRIBER_ID", "praxis")
 
 SYNC_STATE_FILE = "sync_state.json"
-BATCH_SIZE = 50
-
 now_utc = datetime.now(timezone.utc).isoformat()
 
 

@@ -24,15 +24,6 @@ BATCH_SIZE = 50
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
-def serialize_value(value):
-    """Serializar valores para JSON-compatible"""
-    if value is None:
-        return None
-    elif isinstance(value, (datetime,)):
-        return value.isoformat()
-    else:
-        return value
-
 def safe_upsert(table_name, data, key='id', retry=0):
     """Upsert com retry logic"""
     try:

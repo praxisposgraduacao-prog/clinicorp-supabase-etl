@@ -145,6 +145,11 @@ try:
                 })
 
         if new_profs:
+            # dedup by cpf — keep last occurrence to avoid UNIQUE violation in batch
+            seen_cpf = {}
+            for p in new_profs:
+                seen_cpf[p['cpf']] = p
+            new_profs = list(seen_cpf.values())
             ok, err = upsert_batch('professionals', new_profs)
             print(f"    [OK] {ok} novos professionals inseridos ({err} erros)")
         else:

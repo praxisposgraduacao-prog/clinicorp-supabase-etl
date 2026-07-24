@@ -61,7 +61,13 @@ for prof in professionals:
         '_sync_id': None,
     })
 
-print(f"    Dados preparados: {len(data_to_insert)} registros")
+# dedup by cpf — keep last occurrence to avoid UNIQUE violation in batch
+seen_cpf = {}
+for p in data_to_insert:
+    seen_cpf[p['cpf']] = p
+data_to_insert = list(seen_cpf.values())
+
+print(f"    Dados preparados: {len(data_to_insert)} registros (após dedup CPF)")
 
 # 3. Inserir no banco local
 print("\n[3] Inserindo no banco local...")

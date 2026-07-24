@@ -6,6 +6,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -101,4 +102,8 @@ async def job_logs(websocket: WebSocket, job_id: str, token: str = Query(...)):
 
 _dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 if os.path.exists(_dist):
-    app.mount("/", StaticFiles(directory=_dist, html=True), name="static")
+    app.mount("/assets", StaticFiles(directory=os.path.join(_dist, "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        return FileResponse(os.path.join(_dist, "index.html"))
